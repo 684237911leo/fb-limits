@@ -90,7 +90,9 @@
       <li>На экране <b>OAuth consent screen</b> добавьте свой Gmail в <b>Test users</b>.</li>
       <li>Вставьте полученный Client ID сюда:</li>
     </ol>
-    <input id="clientId" type="text" placeholder="1234567890-xxxx.apps.googleusercontent.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <input id="clientId" type="text" placeholder="Client ID: 1234567890-xxxx.apps.googleusercontent.com" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <p class="note" style="margin-bottom:6px">Проект для биллинга запросов метрик (нужен ID отдельного пустого проекта с включённым биллингом и Cloud Monitoring API; можно оставить пустым):</p>
+    <input id="quotaId" type="text" placeholder="ID проекта, например limits-tool-123456" autocomplete="off" autocapitalize="off" spellcheck="false">
     <div class="actions">
       <button id="btnSave">Сохранить и войти</button>
       <button id="btnDemo" class="ghost">Посмотреть демо</button>
@@ -194,8 +196,10 @@ async function signIn() {
 
 /* ---------- API ---------- */
 class AuthError extends Error {}
-async function api(url) {
-  const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+async function api(url, quota) {
+  const headers = { Authorization: 'Bearer ' + token };
+  if (quota) headers['X-Goog-User-Project'] = quota;
+  const r = await fetch(url, { headers });
   if (r.status === 401) throw new AuthError('Сессия истекла');
   let body = null;
   try { body = await r.json(); } catch (e) {}
@@ -251,7 +255,7 @@ async function fetchSeries(pid, metric, startMs, endMs, aggregate) {
   let page = '';
   do {
     if (page) q.set('pageToken', page);
-    const d = await api('https://monitoring.googleapis.com/v3/projects/' + encodeURIComponent(pid) + '/timeSeries?' + q);
+    const d = await api('https://monitoring.googleapis.com/v3/projects/' + encodeURIComponent(pid) + '/timeSeries?' + q, store.get('fl_quota') || '');
     (d.timeSeries || []).forEach(s => series.push(s));
     page = d.nextPageToken || '';
   } while (page);
@@ -352,7 +356,7 @@ async function loadAll() {
     const loaded = await pool(projects, 4, p => loadProject(p, now));
     render(loaded, now);
     if (loaded.every(p => p.errors.length)) {
-      setBanner('Метрики не загрузились ни для одного проекта. Скорее всего, в проекте, где создан OAuth Client ID, выключен Cloud Monitoring API — включите его в Google Cloud Console (APIs & Services → Library).');
+      setBanner('Метрики не загрузились ни для одного проекта. Обычно это значит, что у проекта, через который идут запросы, не включён биллинг или Cloud Monitoring API. Укажите такой проект в настройках (⚙). Подробности ошибки ниже, под каждым проектом.');
     }
   } catch (e) {
     if (e instanceof AuthError) { dropToken(); setStatus(''); showLogin(); }
@@ -377,6 +381,7 @@ function renderDemo() {
 function showSetup() {
   $('origin').textContent = location.origin;
   $('clientId').value = store.get('fl_client') || '';
+  $('quotaId').value = store.get('fl_quota') || '';
   show('setup', true); show('login', false);
 }
 function showLogin() { show('login', true); show('setup', false); show('btnRefresh', false); }
@@ -389,6 +394,8 @@ $('btnSave').onclick = () => {
   const v = $('clientId').value.trim();
   if (!/\.apps\.googleusercontent\.com$/.test(v)) { setBanner('Client ID должен заканчиваться на .apps.googleusercontent.com'); return; }
   store.set('fl_client', v);
+  const qv = $('quotaId').value.trim();
+  if (qv) store.set('fl_quota', qv); else store.del('fl_quota');
   demo = false; show('demoTag', false); show('setup', false); $('list').innerHTML = ''; setStatus('');
   dropToken(); signIn();
 };
